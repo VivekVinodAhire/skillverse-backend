@@ -13,6 +13,14 @@ const createUser = async ({
   email,
   password,
 }) => {
+  const normalizedFullName =
+    String(fullName || "").trim();
+
+  const normalizedEmail =
+    String(email || "")
+      .trim()
+      .toLowerCase();
+
   const [result] =
     await pool.execute(
       `
@@ -24,8 +32,8 @@ const createUser = async ({
         VALUES (?, ?, ?)
       `,
       [
-        fullName,
-        email,
+        normalizedFullName,
+        normalizedEmail,
         password,
       ]
     );
@@ -34,12 +42,14 @@ const createUser = async ({
     id:
       result.insertId,
 
-    fullName,
+    fullName:
+      normalizedFullName,
 
     full_name:
-      fullName,
+      normalizedFullName,
 
-    email,
+    email:
+      normalizedEmail,
   };
 };
 
@@ -55,6 +65,10 @@ const findUserByEmail = async (
       .trim()
       .toLowerCase();
 
+  if (!normalizedEmail) {
+    return null;
+  }
+
   const [rows] =
     await pool.execute(
       `
@@ -63,8 +77,7 @@ const findUserByEmail = async (
           full_name,
           email,
           password,
-          created_at,
-          updated_at
+          created_at
         FROM users
         WHERE LOWER(email) = ?
         LIMIT 1
@@ -103,8 +116,7 @@ const findUserById = async (
           id,
           full_name,
           email,
-          created_at,
-          updated_at
+          created_at
         FROM users
         WHERE id = ?
         LIMIT 1
