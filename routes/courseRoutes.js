@@ -4,6 +4,8 @@ const express = require(
 
 const {
   generateAiCourse,
+  fetchGenerationStatus,
+  resumeCourseGeneration,
   createSampleCourse,
   fetchAllCourses,
   fetchMyCourses,
@@ -22,9 +24,8 @@ const {
 const router =
   express.Router();
 
-
 /*
-  Generate and save AI course
+  Start background AI generation
 
   POST /api/courses/generate
 */
@@ -34,11 +35,30 @@ router.post(
   generateAiCourse
 );
 
+/*
+  Get live generation status
+
+  GET /api/courses/generation/:jobId?userId=1
+*/
+
+router.get(
+  "/generation/:jobId",
+  fetchGenerationStatus
+);
+
+/*
+  Resume failed generation
+
+  POST /api/courses/generation/:jobId/resume
+*/
+
+router.post(
+  "/generation/:jobId/resume",
+  resumeCourseGeneration
+);
 
 /*
   Temporary sample course
-
-  POST /api/courses/sample
 */
 
 router.post(
@@ -46,11 +66,8 @@ router.post(
   createSampleCourse
 );
 
-
 /*
   Logged-in user's courses
-
-  GET /api/courses/my-courses?userId=1
 */
 
 router.get(
@@ -58,11 +75,8 @@ router.get(
   fetchMyCourses
 );
 
-
 /*
-  Get all courses
-
-  GET /api/courses
+  All published courses
 */
 
 router.get(
@@ -70,11 +84,8 @@ router.get(
   fetchAllCourses
 );
 
-
 /*
-  Download course notes PDF
-
-  GET /api/courses/:courseId/download-notes?userId=1
+  Download course notes
 */
 
 router.get(
@@ -82,11 +93,8 @@ router.get(
   downloadCourseNotesPdf
 );
 
-
 /*
-  Get complete course by ID
-
-  GET /api/courses/:courseId
+  Complete course
 */
 
 router.get(
@@ -94,17 +102,13 @@ router.get(
   fetchCourseById
 );
 
-
 /*
-  Delete logged-in user's course
-
-  DELETE /api/courses/:courseId?userId=1
+  Delete own course
 */
 
 router.delete(
   "/:courseId",
   deleteMyCourse
 );
-
 
 module.exports = router;

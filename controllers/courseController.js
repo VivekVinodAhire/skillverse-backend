@@ -1,761 +1,1308 @@
 const {
+  generateCourseOutline,
+  generateCompleteModule,
+} = require(
+  "../services/aiCourseService"
+);
+
+const {
   createCompleteCourse,
+  createGenerationJob,
+  getGenerationJobById,
+  updateGenerationJob,
+  createCourseDraft,
+  saveGeneratedModule,
+  getSavedModulesForResume,
+  finalizeGeneratedCourse,
+  markCourseGenerationFailed,
   getAllCourses,
   getCompleteCourseById,
   getCoursesByUserId,
   deleteCourseByUserId,
-} = require("../models/courseModel");
-
-
-const {
-  generateCourseWithGemini,
-} = require("../services/aiCourseService");
-/*
-  Temporary sample course.
-
-  Step 3 मध्ये हाच data Gemini कडून येईल.
-*/
-
-/*
-  Gemini AI वापरून complete course generate करणे
-  आणि MySQL मध्ये save करणे.
-*/
-
-const generateAiCourse = async (
-  req,
-  res
-) => {
-  try {
-    const {
-      topic,
-      level = "Beginner",
-      language = "English",
-      numberOfModules = 4,
-      lessonsPerModule = 3,
-    } = req.body;
-
-    /*
-      Topic validation
-    */
-
-    if (
-      !topic ||
-      typeof topic !== "string" ||
-      topic.trim().length < 2
-    ) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          "Please enter a valid course topic",
-      });
-    }
-
-    /*
-      Level validation
-    */
-
-    const allowedLevels = [
-      "Beginner",
-      "Intermediate",
-      "Advanced",
-    ];
-
-    const normalizedLevel =
-      allowedLevels.find(
-        (item) =>
-          item.toLowerCase() ===
-          String(level).toLowerCase()
-      );
-
-    if (!normalizedLevel) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          "Level must be Beginner, Intermediate or Advanced",
-      });
-    }
-
-    /*
-      Modules validation
-    */
-
-    const moduleCount = Number(
-      numberOfModules
-    );
-
-    if (
-      !Number.isInteger(moduleCount) ||
-      moduleCount < 1 ||
-      moduleCount > 8
-    ) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          "Number of modules must be between 1 and 8",
-      });
-    }
-
-    /*
-      Lessons validation
-    */
-
-    const lessonCount = Number(
-      lessonsPerModule
-    );
-
-    if (
-      !Number.isInteger(lessonCount) ||
-      lessonCount < 1 ||
-      lessonCount > 6
-    ) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          "Lessons per module must be between 1 and 6",
-      });
-    }
-
-    console.log(
-      `AI course generation started: ${topic}`
-    );
-
-    /*
-      Step 1:
-      Gemini कडून complete JSON generate कर
-    */
-
-    const generatedCourse =
-      await generateCourseWithGemini({
-        topic: topic.trim(),
-
-        level: normalizedLevel,
-
-        language:
-          String(language).trim() ||
-          "English",
-
-        numberOfModules: moduleCount,
-
-        lessonsPerModule:
-          lessonCount,
-      });
-
-    /*
-      Step 2:
-      Logged-in user implementation नंतर
-      req.user.id वापरू.
-
-      सध्या testing साठी null.
-    */
-
-    const requestUserId = Number(
-  req.user?.id || req.body.userId
+} = require(
+  "../models/courseModel"
 );
 
-if (
-  !Number.isInteger(requestUserId) ||
-  requestUserId <= 0
-) {
-  return res.status(400).json({
-    success: false,
-    message:
-      "A valid logged-in user ID is required",
-  });
-}
+const {
+  userExistsById,
+} = require(
+  "../models/userModel"
+);
 
-generatedCourse.userId = requestUserId;
-generatedCourse.generatedByAi = true;
-generatedCourse.status = "published";
+const runningJobs =
+  new Set();
 
-    /*
-      Step 3:
-      Complete course MySQL मध्ये save कर
-    */
-
-    const savedCourse =
-      await createCompleteCourse(
-        generatedCourse
-      );
-
-    console.log(
-      `AI course saved successfully. Course ID: ${savedCourse.courseId}`
-    );
-
-    return res.status(201).json({
-      success: true,
-
-      message:
-        "AI course generated and saved successfully",
-
-      data: {
-        courseId:
-          savedCourse.courseId,
-
-        title:
-          generatedCourse.title,
-
-        description:
-          generatedCourse.description,
-
-        category:
-          generatedCourse.category,
-
-        level:
-          generatedCourse.level,
-
-        language:
-          generatedCourse.language,
-
-        estimatedDuration:
-          generatedCourse
-            .estimatedDuration,
-
-        totalModules:
-          savedCourse.totalModules,
-
-        totalLessons:
-          savedCourse.totalLessons,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Generate AI Course Error:",
-      error
-    );
-
-    let statusCode = 500;
-
-    if (
-      error.status === 429 ||
-      error.code === 429
-    ) {
-      statusCode = 429;
-    }
-
-    return res.status(statusCode).json({
-      success: false,
-
-      message:
-        error.message ||
-        "Failed to generate AI course",
-    });
-  }
-};
-
-const createSampleCourse = async (
-  req,
-  res
+const normalizeUserId = (
+  req
 ) => {
-  try {
-    const sampleCourse = {
-      userId: null,
-
-      title:
-        "Java Programming Complete Course",
-
-      description:
-        "Learn Java programming from beginner to advanced level with lessons, examples, videos and quizzes.",
-
-      category: "Programming",
-
-      level: "Beginner",
-
-      language: "English",
-
-      estimatedDuration: "8 Weeks",
-
-      status: "published",
-
-      generatedByAi: false,
-
-      modules: [
-        {
-          title: "Introduction to Java",
-
-          description:
-            "Understand Java, its features and development environment.",
-
-          estimatedDuration: "1 Week",
-
-          lessons: [
-            {
-              title: "What is Java?",
-
-              description:
-                "Introduction to Java programming language.",
-
-              content:
-                "Java is a high-level, object-oriented programming language. It is widely used for web applications, Android applications and enterprise systems.",
-
-              lessonType: "video",
-
-              durationMinutes: 12,
-
-              youtubeSearchQuery:
-                "Java programming introduction for beginners",
-
-              codeLanguage: "java",
-
-              codeExample: `public class Main {
-  public static void main(String[] args) {
-    System.out.println("Hello Java");
-  }
-}`,
-
-              practiceTask:
-                "Write a Java program that prints your name.",
-
-              summary:
-                "Java is secure, portable and object-oriented.",
-            },
-
-            {
-              title:
-                "Install Java and IntelliJ IDEA",
-
-              description:
-                "Install the required software for Java development.",
-
-              content:
-                "Install the Java Development Kit and configure an IDE such as IntelliJ IDEA or VS Code.",
-
-              lessonType: "video",
-
-              durationMinutes: 15,
-
-              youtubeSearchQuery:
-                "Install Java JDK IntelliJ IDEA Windows",
-
-              practiceTask:
-                "Install the JDK and run your first Java program.",
-
-              summary:
-                "The JDK is required to compile and run Java programs.",
-            },
-          ],
-
-          quiz: {
-            title:
-              "Introduction to Java Quiz",
-
-            description:
-              "Test your basic Java knowledge.",
-
-            passingPercentage: 60,
-
-            timeLimitMinutes: 10,
-
-            questions: [
-              {
-                question:
-                  "What type of programming language is Java?",
-
-                options: {
-                  A: "Only procedural",
-                  B: "Object-oriented",
-                  C: "Markup language",
-                  D: "Database language",
-                },
-
-                correctOption: "B",
-
-                explanation:
-                  "Java is primarily an object-oriented programming language.",
-              },
-
-              {
-                question:
-                  "Which tool is required to compile Java code?",
-
-                options: {
-                  A: "JDK",
-                  B: "MySQL",
-                  C: "Chrome",
-                  D: "Node.js",
-                },
-
-                correctOption: "A",
-
-                explanation:
-                  "The Java Development Kit contains the Java compiler.",
-              },
-            ],
-          },
-        },
-
-        {
-          title:
-            "Java Variables and Data Types",
-
-          description:
-            "Learn how Java stores and manages data.",
-
-          estimatedDuration: "1 Week",
-
-          lessons: [
-            {
-              title:
-                "Variables in Java",
-
-              description:
-                "Understand variables and their syntax.",
-
-              content:
-                "A variable is a named memory location used to store data.",
-
-              lessonType: "video",
-
-              durationMinutes: 14,
-
-              youtubeSearchQuery:
-                "Java variables tutorial for beginners",
-
-              codeLanguage: "java",
-
-              codeExample: `public class Main {
-  public static void main(String[] args) {
-    String name = "Darshan";
-    int age = 21;
-
-    System.out.println(name);
-    System.out.println(age);
-  }
-}`,
-
-              practiceTask:
-                "Create variables for your name, age and college.",
-
-              summary:
-                "Variables are used to store values in memory.",
-            },
-
-            {
-              title:
-                "Primitive Data Types",
-
-              description:
-                "Learn int, double, char and boolean data types.",
-
-              content:
-                "Java primitive types include byte, short, int, long, float, double, char and boolean.",
-
-              lessonType: "article",
-
-              durationMinutes: 18,
-
-              youtubeSearchQuery:
-                "Java primitive data types tutorial",
-
-              practiceTask:
-                "Create one variable for each primitive data type.",
-
-              summary:
-                "Primitive data types store simple values.",
-            },
-          ],
-
-          quiz: {
-            title:
-              "Variables and Data Types Quiz",
-
-            description:
-              "Test your understanding of variables and data types.",
-
-            passingPercentage: 60,
-
-            timeLimitMinutes: 10,
-
-            questions: [
-              {
-                question:
-                  "Which data type stores whole numbers?",
-
-                options: {
-                  A: "String",
-                  B: "boolean",
-                  C: "int",
-                  D: "char",
-                },
-
-                correctOption: "C",
-
-                explanation:
-                  "The int data type stores whole numbers.",
-              },
-
-              {
-                question:
-                  "Which data type stores true or false?",
-
-                options: {
-                  A: "double",
-                  B: "boolean",
-                  C: "char",
-                  D: "long",
-                },
-
-                correctOption: "B",
-
-                explanation:
-                  "The boolean data type stores true or false values.",
-              },
-            ],
-          },
-        },
-      ],
-    };
-
-    const result =
-      await createCompleteCourse(
-        sampleCourse
-      );
-
-    return res.status(201).json({
-      success: true,
-
-      message:
-        "Sample course created successfully",
-
-      data: result,
-    });
-  } catch (error) {
-    console.error(
-      "Create Course Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-
-      message:
-        error.message ||
-        "Failed to create course",
-    });
-  }
-};
-
-
-const fetchAllCourses = async (
-  req,
-  res
-) => {
-  try {
-    const courses =
-      await getAllCourses();
-
-    return res.status(200).json({
-      success: true,
-
-      total: courses.length,
-
-      courses,
-    });
-  } catch (error) {
-    console.error(
-      "Fetch Courses Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-
-      message:
-        error.message ||
-        "Failed to fetch courses",
-    });
-  }
-};
-
-
-const fetchCourseById = async (
-  req,
-  res
-) => {
-  try {
-    const courseId = Number(
-      req.params.courseId
-    );
-
-    if (
-      !Number.isInteger(courseId) ||
-      courseId <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          "A valid course ID is required",
-      });
-    }
-
-    const course =
-      await getCompleteCourseById(
-        courseId
-      );
-
-    if (!course) {
-      return res.status(404).json({
-        success: false,
-
-        message: "Course not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-
-      course,
-    });
-  } catch (error) {
-    console.error(
-      "Fetch Course Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-
-      message:
-        error.message ||
-        "Failed to fetch course",
-    });
-  }
-};
-
-/*
-  Get logged-in user's courses
-
-  GET /api/courses/my-courses?userId=1
-*/
-
-const fetchMyCourses = async (
-  req,
-  res
-) => {
-  try {
-    const userId = Number(
-      req.user?.id || req.query.userId
-    );
-
-    if (
-      !Number.isInteger(userId) ||
-      userId <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A valid user ID is required",
-      });
-    }
-
-    const courses =
-      await getCoursesByUserId(userId);
-
-    return res.status(200).json({
-      success: true,
-      total: courses.length,
-      courses,
-    });
-  } catch (error) {
-    console.error(
-      "Fetch My Courses Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to fetch your courses",
-    });
-  }
-};
-
-
-/*
-  Delete logged-in user's course
-
-  DELETE /api/courses/:courseId?userId=1
-*/
-
-const deleteMyCourse = async (
-  req,
-  res
-) => {
-  try {
-    const courseId = Number(
-      req.params.courseId
-    );
-
-    const userId = Number(
+  const userId =
+    Number(
       req.user?.id ||
-        req.query.userId ||
-        req.body?.userId
+        req.body?.userId ||
+        req.query?.userId
     );
 
-    if (
-      !Number.isInteger(courseId) ||
-      courseId <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A valid course ID is required",
-      });
-    }
-
-    if (
-      !Number.isInteger(userId) ||
-      userId <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A valid user ID is required",
-      });
-    }
-
-    const deleted =
-      await deleteCourseByUserId({
-        courseId,
-        userId,
-      });
-
-    if (!deleted) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Course not found or you cannot delete this course",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message:
-        "Course deleted successfully",
-    });
-  } catch (error) {
-    console.error(
-      "Delete Course Error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to delete course",
-    });
+  if (
+    !Number.isInteger(
+      userId
+    ) ||
+    userId <= 0
+  ) {
+    return null;
   }
+
+  return userId;
 };
 
+const safeString = (
+  value,
+  fallback = ""
+) => {
+  const normalizedValue =
+    String(
+      value ?? ""
+    ).trim();
+
+  return (
+    normalizedValue ||
+    fallback
+  );
+};
+
+const normalizeLevel = (
+  value
+) => {
+  const allowedLevels = [
+    "Beginner",
+    "Intermediate",
+    "Advanced",
+  ];
+
+  const matchedLevel =
+    allowedLevels.find(
+      (level) =>
+        level.toLowerCase() ===
+        safeString(value)
+          .toLowerCase()
+    );
+
+  return (
+    matchedLevel ||
+    "Beginner"
+  );
+};
+
+const runGenerationJob =
+  async ({
+    jobId,
+    userId,
+  }) => {
+    const runningKey =
+      `${userId}:${jobId}`;
+
+    if (
+      runningJobs.has(
+        runningKey
+      )
+    ) {
+      return;
+    }
+
+    runningJobs.add(
+      runningKey
+    );
+
+    let courseId = null;
+
+    try {
+      const job =
+        await getGenerationJobById({
+          jobId,
+          userId,
+        });
+
+      if (!job) {
+        throw new Error(
+          "Generation job was not found"
+        );
+      }
+
+      courseId =
+        Number(
+          job.course_id
+        ) ||
+        null;
+
+      await updateGenerationJob({
+        jobId,
+        userId,
+        status:
+          "generating",
+        stage:
+          "outline",
+        progressPercentage:
+          Math.max(
+            Number(
+              job.progress_percentage
+            ) ||
+              0,
+            3
+          ),
+        progressMessage:
+          "Creating the course roadmap",
+        errorMessage:
+          null,
+      });
+
+      let outline =
+        job.outline;
+
+      if (!outline) {
+        outline =
+          await generateCourseOutline({
+            topic:
+              job.topic,
+
+            level:
+              job.level,
+
+            language:
+              job.language,
+
+            numberOfModules:
+              Number(
+                job.number_of_modules
+              ),
+
+            lessonsPerModule:
+              Number(
+                job.lessons_per_module
+              ),
+
+            onRetry:
+              async ({
+                attempt,
+                maxAttempts,
+              }) => {
+                await updateGenerationJob({
+                  jobId,
+                  userId,
+                  status:
+                    "generating",
+                  stage:
+                    "outline_retry",
+                  progressPercentage:
+                    4,
+                  progressMessage:
+                    `Retrying course roadmap (${attempt}/${maxAttempts})`,
+                });
+              },
+          });
+
+        await updateGenerationJob({
+          jobId,
+          userId,
+          outline,
+          progressPercentage:
+            10,
+          progressMessage:
+            "Course roadmap created",
+        });
+      }
+
+      if (!courseId) {
+        courseId =
+          await createCourseDraft({
+            userId,
+            outline,
+
+            numberOfModules:
+              Number(
+                job.number_of_modules
+              ),
+
+            lessonsPerModule:
+              Number(
+                job.lessons_per_module
+              ),
+          });
+
+        await updateGenerationJob({
+          jobId,
+          userId,
+          courseId,
+          progressPercentage:
+            12,
+          progressMessage:
+            "Course draft saved",
+        });
+      }
+
+      const savedModules =
+        await getSavedModulesForResume(
+          courseId
+        );
+
+      const savedOrders =
+        new Set(
+          savedModules.map(
+            (module) =>
+              Number(
+                module.moduleOrder
+              )
+          )
+        );
+
+      const previousModuleTitles =
+        savedModules
+          .sort(
+            (
+              first,
+              second
+            ) =>
+              first.moduleOrder -
+              second.moduleOrder
+          )
+          .map(
+            (module) =>
+              module.title
+          );
+
+      let completedModules =
+        savedOrders.size;
+
+      const totalModules =
+        Number(
+          job.number_of_modules
+        );
+
+      const lessonsPerModule =
+        Number(
+          job.lessons_per_module
+        );
+
+      for (
+        let moduleIndex = 0;
+        moduleIndex <
+        outline.modules.length;
+        moduleIndex += 1
+      ) {
+        const moduleOrder =
+          moduleIndex + 1;
+
+        if (
+          savedOrders.has(
+            moduleOrder
+          )
+        ) {
+          continue;
+        }
+
+        const moduleOutline =
+          outline.modules[
+            moduleIndex
+          ];
+
+        const basePercentage =
+          12 +
+          Math.round(
+            (
+              completedModules /
+              totalModules
+            ) *
+              78
+          );
+
+        await updateGenerationJob({
+          jobId,
+          userId,
+          courseId,
+          status:
+            "generating",
+          stage:
+            "module",
+          currentModule:
+            moduleOrder,
+          completedModules,
+          progressPercentage:
+            Math.min(
+              basePercentage,
+              90
+            ),
+          progressMessage:
+            `Generating Module ${moduleOrder} of ${totalModules}: ${moduleOutline.title}`,
+        });
+
+        const generatedModule =
+          await generateCompleteModule({
+            topic:
+              job.topic,
+
+            courseTitle:
+              outline.title,
+
+            courseDescription:
+              outline.description,
+
+            level:
+              job.level,
+
+            language:
+              job.language,
+
+            moduleOutline,
+
+            moduleIndex,
+
+            numberOfModules:
+              totalModules,
+
+            lessonsPerModule,
+
+            previousModuleTitles,
+
+            onRetry:
+              async ({
+                attempt,
+                maxAttempts,
+              }) => {
+                await updateGenerationJob({
+                  jobId,
+                  userId,
+                  courseId,
+                  status:
+                    "generating",
+                  stage:
+                    "module_retry",
+                  currentModule:
+                    moduleOrder,
+                  completedModules,
+                  progressPercentage:
+                    Math.min(
+                      basePercentage,
+                      90
+                    ),
+                  progressMessage:
+                    `Retrying Module ${moduleOrder} (${attempt}/${maxAttempts})`,
+                });
+              },
+          });
+
+        await saveGeneratedModule({
+          courseId,
+
+          moduleData:
+            generatedModule,
+
+          moduleOrder,
+        });
+
+        previousModuleTitles.push(
+          generatedModule.title
+        );
+
+        savedOrders.add(
+          moduleOrder
+        );
+
+        completedModules += 1;
+
+        const savedPercentage =
+          12 +
+          Math.round(
+            (
+              completedModules /
+              totalModules
+            ) *
+              78
+          );
+
+        await updateGenerationJob({
+          jobId,
+          userId,
+          courseId,
+          status:
+            "generating",
+          stage:
+            "module_saved",
+          currentModule:
+            moduleOrder,
+          completedModules,
+          progressPercentage:
+            Math.min(
+              savedPercentage,
+              92
+            ),
+          progressMessage:
+            `Module ${moduleOrder} of ${totalModules} saved successfully`,
+        });
+      }
+
+      const totalLessons =
+        totalModules *
+        lessonsPerModule;
+
+      await finalizeGeneratedCourse({
+        courseId,
+        totalModules,
+        totalLessons,
+      });
+
+      await updateGenerationJob({
+        jobId,
+        userId,
+        courseId,
+        status:
+          "completed",
+        stage:
+          "completed",
+        currentModule:
+          totalModules,
+        completedModules:
+          totalModules,
+        progressPercentage:
+          100,
+        progressMessage:
+          "Course generated successfully",
+        errorMessage:
+          null,
+        completed:
+          true,
+      });
+
+      console.log(
+        `✅ Course generation completed. Job: ${jobId}, Course: ${courseId}`
+      );
+    } catch (error) {
+      console.error(
+        `Course generation job ${jobId} failed:`,
+        error
+      );
+
+      await updateGenerationJob({
+        jobId,
+        userId,
+        courseId:
+          courseId ||
+          undefined,
+        status:
+          "failed",
+        stage:
+          "failed",
+        progressMessage:
+          "Course generation paused",
+        errorMessage:
+          error.message ||
+          "Course generation failed",
+      }).catch(
+        (updateError) => {
+          console.error(
+            "Failed to update generation job:",
+            updateError
+          );
+        }
+      );
+
+      if (courseId) {
+        await markCourseGenerationFailed(
+          courseId
+        ).catch(
+          (courseError) => {
+            console.error(
+              "Failed to update course status:",
+              courseError
+            );
+          }
+        );
+      }
+    } finally {
+      runningJobs.delete(
+        runningKey
+      );
+    }
+  };
+
+/*
+  Start asynchronous generation
+
+  POST /api/courses/generate
+*/
+
+const generateAiCourse =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const userId =
+        normalizeUserId(req);
+
+      const topic =
+        safeString(
+          req.body?.topic
+        );
+
+      const level =
+        normalizeLevel(
+          req.body?.level
+        );
+
+      const language =
+        safeString(
+          req.body?.language,
+          "English"
+        );
+
+      const numberOfModules =
+        Number(
+          req.body
+            ?.numberOfModules
+        );
+
+      const lessonsPerModule =
+        Number(
+          req.body
+            ?.lessonsPerModule
+        );
+
+      if (!userId) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "A valid user ID is required",
+          });
+      }
+
+      if (
+        !(await userExistsById(
+          userId
+        ))
+      ) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Logged-in user was not found",
+          });
+      }
+
+      if (
+        topic.length < 2
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Course topic must contain at least 2 characters",
+          });
+      }
+
+      if (
+        !Number.isInteger(
+          numberOfModules
+        ) ||
+        numberOfModules <
+          1 ||
+        numberOfModules >
+          8
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Number of modules must be between 1 and 8",
+          });
+      }
+
+      if (
+        !Number.isInteger(
+          lessonsPerModule
+        ) ||
+        lessonsPerModule <
+          1 ||
+        lessonsPerModule >
+          6
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Lessons per module must be between 1 and 6",
+          });
+      }
+
+      const jobId =
+        await createGenerationJob({
+          userId,
+          topic,
+          level,
+          language,
+          numberOfModules,
+          lessonsPerModule,
+        });
+
+      setImmediate(() => {
+        runGenerationJob({
+          jobId,
+          userId,
+        }).catch(
+          (error) => {
+            console.error(
+              "Background generation error:",
+              error
+            );
+          }
+        );
+      });
+
+      return res
+        .status(202)
+        .json({
+          success: true,
+
+          message:
+            "Course generation started",
+
+          jobId,
+
+          status:
+            "queued",
+
+          progressPercentage:
+            0,
+        });
+    } catch (error) {
+      console.error(
+        "Generate AI Course Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          message:
+            error.message ||
+            "Failed to start course generation",
+        });
+    }
+  };
+
+/*
+  Poll generation status
+
+  GET /api/courses/generation/:jobId
+*/
+
+const fetchGenerationStatus =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const userId =
+        normalizeUserId(req);
+
+      const jobId =
+        Number(
+          req.params.jobId
+        );
+
+      if (
+        !userId ||
+        !Number.isInteger(
+          jobId
+        ) ||
+        jobId <= 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Valid user and generation job IDs are required",
+          });
+      }
+
+      const job =
+        await getGenerationJobById({
+          jobId,
+          userId,
+        });
+
+      if (!job) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Generation job not found",
+          });
+      }
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          generation: {
+            jobId:
+              job.id,
+
+            courseId:
+              job.course_id,
+
+            status:
+              job.status,
+
+            stage:
+              job.stage,
+
+            progressPercentage:
+              Number(
+                job.progress_percentage
+              ) ||
+              0,
+
+            currentModule:
+              Number(
+                job.current_module
+              ) ||
+              0,
+
+            completedModules:
+              Number(
+                job.completed_modules
+              ) ||
+              0,
+
+            totalModules:
+              Number(
+                job.number_of_modules
+              ) ||
+              0,
+
+            message:
+              job.progress_message,
+
+            error:
+              job.error_message,
+
+            canResume:
+              job.status ===
+              "failed",
+          },
+        });
+    } catch (error) {
+      console.error(
+        "Fetch Generation Status Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to fetch generation status",
+        });
+    }
+  };
+
+/*
+  Resume failed generation
+
+  POST /api/courses/generation/:jobId/resume
+*/
+
+const resumeCourseGeneration =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const userId =
+        normalizeUserId(req);
+
+      const jobId =
+        Number(
+          req.params.jobId
+        );
+
+      if (
+        !userId ||
+        !Number.isInteger(
+          jobId
+        ) ||
+        jobId <= 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Valid user and generation job IDs are required",
+          });
+      }
+
+      const job =
+        await getGenerationJobById({
+          jobId,
+          userId,
+        });
+
+      if (!job) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Generation job not found",
+          });
+      }
+
+      if (
+        job.status ===
+        "completed"
+      ) {
+        return res
+          .status(200)
+          .json({
+            success: true,
+            message:
+              "Course is already completed",
+            jobId,
+            courseId:
+              job.course_id,
+          });
+      }
+
+      await updateGenerationJob({
+        jobId,
+        userId,
+        status:
+          "queued",
+        stage:
+          "resuming",
+        progressMessage:
+          "Resuming course generation",
+        errorMessage:
+          null,
+      });
+
+      setImmediate(() => {
+        runGenerationJob({
+          jobId,
+          userId,
+        }).catch(
+          (error) => {
+            console.error(
+              "Resume generation error:",
+              error
+            );
+          }
+        );
+      });
+
+      return res
+        .status(202)
+        .json({
+          success: true,
+          message:
+            "Course generation resumed",
+          jobId,
+          courseId:
+            job.course_id,
+        });
+    } catch (error) {
+      console.error(
+        "Resume Course Generation Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to resume course generation",
+        });
+    }
+  };
+
+const createSampleCourse =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const userId =
+        normalizeUserId(req);
+
+      if (!userId) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "A valid user ID is required",
+          });
+      }
+
+      const courseData = {
+        userId,
+        title:
+          "SkillVerse Sample Course",
+        description:
+          "A sample course generated for testing.",
+        category:
+          "Education",
+        level:
+          "Beginner",
+        language:
+          "English",
+        estimatedDuration:
+          "1 Week",
+        generatedByAi:
+          false,
+        status:
+          "published",
+
+        modules: [
+          {
+            title:
+              "Getting Started",
+            description:
+              "Introduction to the sample course.",
+            estimatedDuration:
+              "1 Hour",
+
+            lessons: [
+              {
+                title:
+                  "Welcome Lesson",
+                description:
+                  "Introduction lesson.",
+                content:
+                  "Welcome to your SkillVerse sample course.",
+                lessonType:
+                  "article",
+                durationMinutes:
+                  10,
+                youtubeSearchQuery:
+                  "SkillVerse learning introduction",
+                codeLanguage:
+                  null,
+                codeExample:
+                  null,
+                practiceTask:
+                  "Explore the course dashboard.",
+                summary:
+                  "You learned how the sample course works.",
+              },
+            ],
+
+            quiz: {
+              title:
+                "Getting Started Quiz",
+              description:
+                "Sample quiz.",
+              passingPercentage:
+                60,
+              timeLimitMinutes:
+                5,
+
+              questions:
+                Array.from(
+                  {
+                    length: 5,
+                  },
+                  (
+                    _,
+                    index
+                  ) => ({
+                    question:
+                      `Sample question ${index + 1}?`,
+
+                    options: {
+                      A:
+                        "Option A",
+                      B:
+                        "Option B",
+                      C:
+                        "Option C",
+                      D:
+                        "Option D",
+                    },
+
+                    correctOption:
+                      "A",
+
+                    explanation:
+                      "Option A is the sample correct answer.",
+                  })
+                ),
+            },
+          },
+        ],
+      };
+
+      const result =
+        await createCompleteCourse(
+          courseData
+        );
+
+      return res
+        .status(201)
+        .json({
+          success: true,
+          message:
+            "Sample course created",
+          ...result,
+        });
+    } catch (error) {
+      console.error(
+        "Create Sample Course Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to create sample course",
+        });
+    }
+  };
+
+const fetchAllCourses =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const courses =
+        await getAllCourses();
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+          courses,
+        });
+    } catch (error) {
+      console.error(
+        "Fetch All Courses Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to fetch courses",
+        });
+    }
+  };
+
+const fetchMyCourses =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const userId =
+        normalizeUserId(req);
+
+      if (!userId) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "A valid user ID is required",
+          });
+      }
+
+      const courses =
+        await getCoursesByUserId(
+          userId
+        );
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+          courses,
+        });
+    } catch (error) {
+      console.error(
+        "Fetch My Courses Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to fetch your courses",
+        });
+    }
+  };
+
+const fetchCourseById =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const courseId =
+        Number(
+          req.params.courseId
+        );
+
+      if (
+        !Number.isInteger(
+          courseId
+        ) ||
+        courseId <= 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "A valid course ID is required",
+          });
+      }
+
+      const course =
+        await getCompleteCourseById(
+          courseId
+        );
+
+      if (!course) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Course not found",
+          });
+      }
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+          course,
+        });
+    } catch (error) {
+      console.error(
+        "Fetch Course Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to fetch course",
+        });
+    }
+  };
+
+const deleteMyCourse =
+  async (
+    req,
+    res
+  ) => {
+    try {
+      const courseId =
+        Number(
+          req.params.courseId
+        );
+
+      const userId =
+        normalizeUserId(req);
+
+      if (
+        !Number.isInteger(
+          courseId
+        ) ||
+        courseId <= 0 ||
+        !userId
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Valid course and user IDs are required",
+          });
+      }
+
+      const deleted =
+        await deleteCourseByUserId({
+          courseId,
+          userId,
+        });
+
+      if (!deleted) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Course not found or you do not own it",
+          });
+      }
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+          message:
+            "Course deleted successfully",
+        });
+    } catch (error) {
+      console.error(
+        "Delete Course Error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "Failed to delete course",
+        });
+    }
+  };
 
 module.exports = {
   generateAiCourse,
+  fetchGenerationStatus,
+  resumeCourseGeneration,
   createSampleCourse,
   fetchAllCourses,
   fetchMyCourses,
