@@ -1,161 +1,103 @@
-const express = require(
-  "express"
-);
-
-const cors = require(
-  "cors"
-);
-
-const dotenv = require(
-  "dotenv"
-);
-
-const helmet = require(
-  "helmet"
-);
-
-const morgan = require(
-  "morgan"
-);
-
-const cookieParser = require(
-  "cookie-parser"
-);
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const helmet = require("helmet");
+const morgan = require("morgan");
+const cookieParser = require("cookie-parser");
 
 dotenv.config();
 
 const {
   connectDatabase,
-} = require(
-  "./config/db"
-);
+} = require("./config/db");
 
-const authRoutes = require(
-  "./routes/authRoutes"
-);
-
-const aiRoutes = require(
-  "./routes/aiRoutes"
-);
-
-const aiTutorRoutes = require(
-  "./routes/aiTutorRoutes"
-);
-
-const courseRoutes = require(
-  "./routes/courseRoutes"
-);
-
-const lessonRoutes = require(
-  "./routes/lessonRoutes"
-);
-
-const progressRoutes = require(
-  "./routes/progressRoutes"
-);
-
-const quizRoutes = require(
-  "./routes/quizRoutes"
-);
+const authRoutes = require("./routes/authRoutes");
+const aiRoutes = require("./routes/aiRoutes");
+const aiTutorRoutes = require("./routes/aiTutorRoutes");
+const courseRoutes = require("./routes/courseRoutes");
+const lessonRoutes = require("./routes/lessonRoutes");
+const progressRoutes = require("./routes/progressRoutes");
+const quizRoutes = require("./routes/quizRoutes");
 
 const app = express();
 
-const PORT =
-  Number(
-    process.env.PORT ||
-      5000
-  );
+const PORT = Number(
+  process.env.PORT || 5000
+);
 
-const normalizeOrigin = (
-  value
-) => {
-  return String(
-    value || ""
-  )
+const normalizeOrigin = (value) =>
+  String(value || "")
     .trim()
     .replace(/\/+$/, "");
-};
+
+const configuredFrontendOrigins =
+  String(
+    process.env.FRONTEND_URL || ""
+  )
+    .split(",")
+    .map(normalizeOrigin)
+    .filter(Boolean);
 
 const allowedOrigins = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "https://skillverse-frontend-fawn.vercel.app",
-  process.env.FRONTEND_URL,
-]
-  .map(normalizeOrigin)
-  .filter(Boolean);
-
-const uniqueAllowedOrigins = [
-  ...new Set(
-    allowedOrigins
-  ),
+  ...configuredFrontendOrigins,
 ];
 
-const corsOptions = {
-  origin: (
-    origin,
-    callback
-  ) => {
-    /*
-      Postman, server-to-server requests
-      आणि काही mobile clients मध्ये
-      origin header नसू शकतो.
-    */
-    if (!origin) {
-      return callback(
-        null,
-        true
-      );
-    }
+const uniqueAllowedOrigins = [
+  ...new Set(allowedOrigins),
+];
 
-    const normalizedRequestOrigin =
-      normalizeOrigin(
-        origin
-      );
+const isAllowedOrigin = (origin) => {
+  const normalizedOrigin =
+    normalizeOrigin(origin);
 
-    if (
-      uniqueAllowedOrigins.includes(
-        normalizedRequestOrigin
-      )
-    ) {
-      return callback(
-        null,
-        true
-      );
-    }
+  if (
+    uniqueAllowedOrigins.includes(
+      normalizedOrigin
+    )
+  ) {
+    return true;
+  }
 
-    /*
-      Vercel preview deployments allow करण्यासाठी.
-      Production domain सुद्धा वर exact list मध्ये आहे.
-    */
-    const isAllowedVercelPreview =
-      /^https:\/\/skillverse-frontend-[a-z0-9-]+\.vercel\.app$/i.test(
-        normalizedRequestOrigin
-      );
-
-    if (
-      isAllowedVercelPreview
-    ) {
-      return callback(
-        null,
-        true
-      );
-    }
-
-    console.warn(
-      `Blocked CORS origin: ${normalizedRequestOrigin}`
+  const isSkillVerseVercelDomain =
+    /^https:\/\/skillverse-frontend(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(
+      normalizedOrigin
     );
 
-    const corsError =
-      new Error(
-        `CORS blocked for origin: ${normalizedRequestOrigin}`
-      );
+  return isSkillVerseVercelDomain;
+};
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    /*
+      Postman, Railway health checks,
+      server-to-server requests आणि
+      mobile clients मध्ये origin नसू शकतो.
+    */
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+
+    const normalizedOrigin =
+      normalizeOrigin(origin);
+
+    console.warn(
+      `Blocked CORS origin: ${normalizedOrigin}`
+    );
+
+    const corsError = new Error(
+      `CORS blocked for origin: ${normalizedOrigin}`
+    );
 
     corsError.status = 403;
 
-    return callback(
-      corsError
-    );
+    return callback(corsError);
   },
 
   credentials: true,
@@ -183,32 +125,30 @@ const corsOptions = {
   maxAge: 86400,
 };
 
-app.disable(
-  "x-powered-by"
-);
+app.disable("x-powered-by");
 
-app.set(
-  "trust proxy",
-  1
-);
+app.set("trust proxy", 1);
 
 app.use(
   helmet({
     crossOriginResourcePolicy: {
-      policy:
-        "cross-origin",
+      policy: "cross-origin",
     },
 
-    contentSecurityPolicy:
-      false,
+    contentSecurityPolicy: false,
   })
 );
 
-app.use(
-  cors(
-    corsOptions
-  )
-);
+/*
+  CORS middleware routes च्या आधी असणे आवश्यक आहे.
+*/
+app.use(cors(corsOptions));
+
+/*
+  Express 5 मध्ये app.options("*", ...)
+  path-to-regexp error देऊ शकतो.
+  त्यामुळे global cors middleware पुरेसा आहे.
+*/
 
 app.use(
   morgan(
@@ -232,57 +172,43 @@ app.use(
   })
 );
 
-app.use(
-  cookieParser()
-);
+app.use(cookieParser());
 
-app.get(
-  "/",
-  (
-    req,
-    res
-  ) => {
-    return res
-      .status(200)
-      .json({
-        success: true,
+app.get("/", (req, res) => {
+  return res.status(200).json({
+    success: true,
 
-        message:
-          "SkillVerse backend is running",
+    message:
+      "SkillVerse backend is running",
 
-        environment:
-          process.env.NODE_ENV ||
-          "development",
+    environment:
+      process.env.NODE_ENV ||
+      "development",
 
-        timestamp:
-          new Date()
-            .toISOString(),
-      });
-  }
-);
+    timestamp:
+      new Date().toISOString(),
+  });
+});
 
 app.get(
   "/api/health",
-  (
-    req,
-    res
-  ) => {
-    return res
-      .status(200)
-      .json({
-        success: true,
+  (req, res) => {
+    return res.status(200).json({
+      success: true,
 
-        message:
-          "SkillVerse API is healthy",
+      message:
+        "SkillVerse API is healthy",
 
-        environment:
-          process.env.NODE_ENV ||
-          "development",
+      environment:
+        process.env.NODE_ENV ||
+        "development",
 
-        timestamp:
-          new Date()
-            .toISOString(),
-      });
+      timestamp:
+        new Date().toISOString(),
+
+      allowedOrigins:
+        uniqueAllowedOrigins,
+    });
   }
 );
 
@@ -321,21 +247,13 @@ app.use(
   quizRoutes
 );
 
-app.use(
-  (
-    req,
-    res
-  ) => {
-    return res
-      .status(404)
-      .json({
-        success: false,
+app.use((req, res) => {
+  return res.status(404).json({
+    success: false,
 
-        message:
-          `Route not found: ${req.method} ${req.originalUrl}`,
-      });
-  }
-);
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
 
 app.use(
   (
@@ -349,17 +267,14 @@ app.use(
       error
     );
 
-    const statusCode =
-      Number(
-        error.status ||
-          error.statusCode ||
-          500
-      );
+    const statusCode = Number(
+      error.status ||
+        error.statusCode ||
+        500
+    );
 
     return res
-      .status(
-        statusCode
-      )
+      .status(statusCode)
       .json({
         success: false,
 
@@ -367,48 +282,45 @@ app.use(
           error.message ||
           "Internal server error",
 
-        ...(process.env
-          .NODE_ENV !==
+        ...(process.env.NODE_ENV !==
           "production" && {
-          stack:
-            error.stack,
+          stack: error.stack,
         }),
       });
   }
 );
 
-const startServer =
-  async () => {
-    try {
-      await connectDatabase();
+const startServer = async () => {
+  try {
+    await connectDatabase();
 
-      app.listen(
-        PORT,
-        "0.0.0.0",
-        () => {
-          console.log(
-            `🚀 Server running on port ${PORT}`
-          );
+    app.listen(
+      PORT,
+      "0.0.0.0",
+      () => {
+        console.log(
+          `🚀 Server running on port ${PORT}`
+        );
 
-          console.log(
-            `🌐 Allowed origins: ${uniqueAllowedOrigins.join(
-              ", "
-            )}`
-          );
+        console.log(
+          `🌐 Allowed origins: ${uniqueAllowedOrigins.join(
+            ", "
+          )}`
+        );
 
-          console.log(
-            `🔗 Health check: /api/health`
-          );
-        }
-      );
-    } catch (error) {
-      console.error(
-        "❌ Server Startup Error:",
-        error
-      );
+        console.log(
+          "🔗 Health check: /api/health"
+        );
+      }
+    );
+  } catch (error) {
+    console.error(
+      "❌ Server Startup Error:",
+      error
+    );
 
-      process.exit(1);
-    }
-  };
+    process.exit(1);
+  }
+};
 
 startServer();
