@@ -25,7 +25,7 @@ const router =
   express.Router();
 
 /*
-  Start background AI generation
+  Start background AI course generation
 
   POST /api/courses/generate
 */
@@ -36,7 +36,7 @@ router.post(
 );
 
 /*
-  Get live generation status
+  Get generation progress
 
   GET /api/courses/generation/:jobId?userId=1
 */
@@ -47,7 +47,7 @@ router.get(
 );
 
 /*
-  Resume failed generation
+  Resume interrupted generation
 
   POST /api/courses/generation/:jobId/resume
 */
@@ -94,7 +94,7 @@ router.get(
 );
 
 /*
-  Complete course
+  Get complete course
 */
 
 router.get(

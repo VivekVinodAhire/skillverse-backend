@@ -1,34 +1,85 @@
-const ai = require("../config/gemini");
+const ai = require(
+  "../config/gemini"
+);
 
 /*
-  AI configuration
+  Stable model priority.
+
+  Railway Variables मधून GEMINI_MODELS दिल्यास
+  त्याला priority मिळेल.
+
+  Example:
+  GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite
 */
 
-const GEMINI_MODEL =
-  process.env.GEMINI_MODEL ||
-  "gemini-3.5-flash";
+const configuredModels =
+  String(
+    process.env.GEMINI_MODELS ||
+      process.env.GEMINI_MODEL ||
+      ""
+  )
+    .split(",")
+    .map((model) =>
+      model.trim()
+    )
+    .filter(Boolean);
 
-const MAX_RETRIES = Number(
-  process.env.GEMINI_MAX_RETRIES || 3
+const GEMINI_MODELS = [
+  ...configuredModels,
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+].filter(
+  (
+    model,
+    index,
+    models
+  ) =>
+    models.indexOf(model) ===
+    index
 );
 
-const RETRY_DELAY_MS = Number(
-  process.env.GEMINI_RETRY_DELAY_MS ||
-    5000
-);
+const MAX_RETRIES_PER_MODEL =
+  Math.max(
+    1,
+    Number(
+      process.env
+        .GEMINI_MAX_RETRIES ||
+        3
+    )
+  );
 
-const GEMINI_TIMEOUT_MS = Number(
-  process.env.GEMINI_TIMEOUT_MS ||
-    240000
-);
+const RETRY_BASE_DELAY_MS =
+  Math.max(
+    1000,
+    Number(
+      process.env
+        .GEMINI_RETRY_DELAY_MS ||
+        5000
+    )
+  );
+
+const GEMINI_TIMEOUT_MS =
+  Math.max(
+    30000,
+    Number(
+      process.env
+        .GEMINI_TIMEOUT_MS ||
+        240000
+    )
+  );
 
 /*
   Helpers
 */
 
-const wait = (milliseconds) =>
+const wait = (
+  milliseconds
+) =>
   new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
+    setTimeout(
+      resolve,
+      milliseconds
+    );
   });
 
 const safeString = (
@@ -51,30 +102,82 @@ const safeString = (
   );
 };
 
-const normalizePositiveNumber = (
+const normalizeLevel = (
+  value
+) => {
+  const allowedLevels = [
+    "Beginner",
+    "Intermediate",
+    "Advanced",
+  ];
+
+  const normalized =
+    safeString(
+      value,
+      "Beginner"
+    ).toLowerCase();
+
+  return (
+    allowedLevels.find(
+      (level) =>
+        level.toLowerCase() ===
+        normalized
+    ) ||
+    "Beginner"
+  );
+};
+
+const normalizeLessonType = (
+  value
+) => {
+  const allowedTypes = [
+    "video",
+    "article",
+    "code",
+    "project",
+  ];
+
+  const normalized =
+    safeString(
+      value,
+      "article"
+    ).toLowerCase();
+
+  return allowedTypes.includes(
+    normalized
+  )
+    ? normalized
+    : "article";
+};
+
+const normalizePositiveInteger = (
   value,
   fallback
 ) => {
-  const number = Number(value);
+  const number =
+    Number(value);
 
   if (
-    Number.isFinite(number) &&
+    Number.isInteger(number) &&
     number > 0
   ) {
-    return Math.round(number);
+    return number;
   }
 
   return fallback;
 };
 
 const normalizePercentage = (
-  value
+  value,
+  fallback = 60
 ) => {
   const percentage =
     Number(value);
 
   if (
-    Number.isFinite(percentage) &&
+    Number.isFinite(
+      percentage
+    ) &&
     percentage >= 1 &&
     percentage <= 100
   ) {
@@ -83,63 +186,14 @@ const normalizePercentage = (
     );
   }
 
-  return 60;
-};
-
-const normalizeLevel = (
-  value
-) => {
-  const validLevels = [
-    "Beginner",
-    "Intermediate",
-    "Advanced",
-  ];
-
-  const normalizedValue =
-    safeString(value)
-      .toLowerCase();
-
-  const matchedLevel =
-    validLevels.find(
-      (level) =>
-        level.toLowerCase() ===
-        normalizedValue
-    );
-
-  return (
-    matchedLevel ||
-    "Beginner"
-  );
-};
-
-const normalizeLessonType = (
-  value
-) => {
-  const validTypes = [
-    "video",
-    "article",
-    "code",
-    "project",
-  ];
-
-  const normalizedValue =
-    safeString(
-      value,
-      "video"
-    ).toLowerCase();
-
-  return validTypes.includes(
-    normalizedValue
-  )
-    ? normalizedValue
-    : "video";
+  return fallback;
 };
 
 const cleanJsonResponse = (
-  text
+  value
 ) => {
-  let cleanedResponse =
-    safeString(text)
+  let text =
+    safeString(value)
       .replace(
         /^```json\s*/i,
         ""
@@ -154,40 +208,36 @@ const cleanJsonResponse = (
       )
       .trim();
 
-  const firstObjectIndex =
-    cleanedResponse.indexOf(
-      "{"
-    );
+  const start =
+    text.indexOf("{");
 
-  const lastObjectIndex =
-    cleanedResponse.lastIndexOf(
-      "}"
-    );
+  const end =
+    text.lastIndexOf("}");
 
   if (
-    firstObjectIndex !== -1 &&
-    lastObjectIndex !== -1 &&
-    lastObjectIndex >
-      firstObjectIndex
+    start >= 0 &&
+    end > start
   ) {
-    cleanedResponse =
-      cleanedResponse.slice(
-        firstObjectIndex,
-        lastObjectIndex + 1
+    text =
+      text.slice(
+        start,
+        end + 1
       );
   }
 
-  return cleanedResponse;
+  return text;
 };
 
 const parseJsonResponse = (
-  text,
+  responseText,
   responseName
 ) => {
-  const cleanedResponse =
-    cleanJsonResponse(text);
+  const cleanedText =
+    cleanJsonResponse(
+      responseText
+    );
 
-  if (!cleanedResponse) {
+  if (!cleanedText) {
     throw new Error(
       `${responseName} returned an empty response`
     );
@@ -195,18 +245,18 @@ const parseJsonResponse = (
 
   try {
     return JSON.parse(
-      cleanedResponse
+      cleanedText
     );
   } catch (error) {
     console.error(
-      `${responseName} JSON parse error:`,
+      `${responseName} JSON parse failed:`,
       error.message
     );
 
     console.error(
       `${responseName} response ending:`,
-      cleanedResponse.slice(
-        -1000
+      cleanedText.slice(
+        -800
       )
     );
 
@@ -216,18 +266,16 @@ const parseJsonResponse = (
   }
 };
 
-const getErrorDetails = (
+const getErrorInformation = (
   error
 ) => {
-  const message =
-    safeString(
-      error?.message
-    ).toLowerCase();
-
-  const causeMessage =
-    safeString(
-      error?.cause?.message
-    ).toLowerCase();
+  const status =
+    Number(
+      error?.status ||
+        error?.response?.status ||
+        error?.cause?.status ||
+        0
+    );
 
   const code =
     safeString(
@@ -235,19 +283,21 @@ const getErrorDetails = (
         error?.cause?.code
     ).toUpperCase();
 
-  const status = Number(
-    error?.status ||
-      error?.response?.status ||
-      0
-  );
+  const message =
+    [
+      error?.message,
+      error?.cause?.message,
+      error?.response?.data
+        ?.message,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
 
   return {
-    message:
-      `${message} ${causeMessage}`.trim(),
-
-    code,
-
     status,
+    code,
+    message,
   };
 };
 
@@ -255,10 +305,13 @@ const isRetryableError = (
   error
 ) => {
   const {
-    message,
-    code,
     status,
-  } = getErrorDetails(error);
+    code,
+    message,
+  } =
+    getErrorInformation(
+      error
+    );
 
   if (
     [
@@ -290,22 +343,10 @@ const isRetryableError = (
 
   return (
     message.includes(
-      "fetch failed"
+      "high demand"
     ) ||
     message.includes(
-      "headers timeout"
-    ) ||
-    message.includes(
-      "timeout"
-    ) ||
-    message.includes(
-      "incomplete"
-    ) ||
-    message.includes(
-      "empty response"
-    ) ||
-    message.includes(
-      "temporarily unavailable"
+      "unavailable"
     ) ||
     message.includes(
       "resource exhausted"
@@ -315,6 +356,21 @@ const isRetryableError = (
     ) ||
     message.includes(
       "overloaded"
+    ) ||
+    message.includes(
+      "fetch failed"
+    ) ||
+    message.includes(
+      "timeout"
+    ) ||
+    message.includes(
+      "temporarily"
+    ) ||
+    message.includes(
+      "incomplete json"
+    ) ||
+    message.includes(
+      "empty response"
     )
   );
 };
@@ -323,10 +379,41 @@ const getFriendlyAiError = (
   error
 ) => {
   const {
-    message,
-    code,
     status,
-  } = getErrorDetails(error);
+    code,
+    message,
+  } =
+    getErrorInformation(
+      error
+    );
+
+  if (
+    status === 503 ||
+    message.includes(
+      "high demand"
+    ) ||
+    message.includes(
+      "unavailable"
+    )
+  ) {
+    return new Error(
+      "Gemini is currently busy. Your generated modules are safe. Please use Resume Generation after a short wait."
+    );
+  }
+
+  if (
+    status === 429 ||
+    message.includes(
+      "resource exhausted"
+    ) ||
+    message.includes(
+      "rate limit"
+    )
+  ) {
+    return new Error(
+      "Gemini request limit was reached. Please wait briefly and resume generation."
+    );
+  }
 
   if (
     code.includes(
@@ -345,34 +432,57 @@ const getFriendlyAiError = (
   }
 
   if (
-    status === 429 ||
-    message.includes(
-      "resource exhausted"
-    ) ||
-    message.includes(
-      "rate limit"
-    )
-  ) {
-    return new Error(
-      "Gemini request limit was reached. Please resume the generation after a short wait."
-    );
-  }
-
-  if (
     message.includes(
       "api key"
     )
   ) {
     return new Error(
-      "The Gemini API key is missing or invalid."
+      "The Gemini API key is missing, invalid, or not permitted to use this model."
     );
   }
 
-  return error;
+  return new Error(
+    safeString(
+      error?.message,
+      "AI course generation failed"
+    )
+  );
 };
 
 /*
-  Structured Gemini request with retry
+  Exponential backoff:
+  5 sec, 10 sec, 20 sec...
+  plus small random jitter.
+*/
+
+const calculateRetryDelay = (
+  attempt
+) => {
+  const exponentialDelay =
+    RETRY_BASE_DELAY_MS *
+    2 **
+      Math.max(
+        0,
+        attempt - 1
+      );
+
+  const jitter =
+    Math.floor(
+      Math.random() * 1500
+    );
+
+  return Math.min(
+    exponentialDelay +
+      jitter,
+    60000
+  );
+};
+
+/*
+  Structured Gemini request with:
+  - model fallback
+  - retry
+  - timeout
 */
 
 const generateStructuredJson =
@@ -384,92 +494,184 @@ const generateStructuredJson =
     temperature = 0.2,
     onRetry,
   }) => {
-    let lastError;
+    let lastError = null;
 
     for (
-      let attempt = 1;
-      attempt <= MAX_RETRIES;
-      attempt += 1
+      let modelIndex = 0;
+      modelIndex <
+      GEMINI_MODELS.length;
+      modelIndex += 1
     ) {
-      try {
-        const response =
-          await ai.models.generateContent(
-            {
-              model:
-                GEMINI_MODEL,
+      const model =
+        GEMINI_MODELS[
+          modelIndex
+        ];
 
-              contents:
-                prompt,
+      for (
+        let attempt = 1;
+        attempt <=
+        MAX_RETRIES_PER_MODEL;
+        attempt += 1
+      ) {
+        try {
+          console.log(
+            `${responseName}: model=${model}, attempt=${attempt}/${MAX_RETRIES_PER_MODEL}`
+          );
 
-              config: {
-                responseMimeType:
-                  "application/json",
+          const response =
+            await ai.models
+              .generateContent({
+                model,
 
-                responseJsonSchema:
-                  responseSchema,
+                contents:
+                  prompt,
 
-                temperature,
+                config: {
+                  responseMimeType:
+                    "application/json",
 
-                maxOutputTokens,
+                  responseJsonSchema:
+                    responseSchema,
 
-                httpOptions: {
-                  timeout:
-                    GEMINI_TIMEOUT_MS,
+                  temperature,
+
+                  maxOutputTokens,
+
+                  httpOptions: {
+                    timeout:
+                      GEMINI_TIMEOUT_MS,
+
+                    retryOptions: {
+                      attempts: 1,
+                    },
+                  },
                 },
-              },
+              });
+
+          if (
+            !response?.text
+          ) {
+            throw new Error(
+              `${responseName} returned an empty response`
+            );
+          }
+
+          const parsed =
+            parseJsonResponse(
+              response.text,
+              responseName
+            );
+
+          console.log(
+            `${responseName} completed using ${model}`
+          );
+
+          return parsed;
+        } catch (error) {
+          lastError =
+            error;
+
+          const {
+            status,
+            code,
+          } =
+            getErrorInformation(
+              error
+            );
+
+          console.error(
+            `${responseName} failed. model=${model}, attempt=${attempt}, status=${status}, code=${code}`,
+            error?.message
+          );
+
+          const retryable =
+            isRetryableError(
+              error
+            );
+
+          const hasAnotherAttempt =
+            attempt <
+            MAX_RETRIES_PER_MODEL;
+
+          if (
+            retryable &&
+            hasAnotherAttempt
+          ) {
+            const retryDelay =
+              calculateRetryDelay(
+                attempt
+              );
+
+            if (
+              typeof onRetry ===
+              "function"
+            ) {
+              await onRetry({
+                model,
+                attempt,
+                maxAttempts:
+                  MAX_RETRIES_PER_MODEL,
+                retryDelay,
+                switchingModel:
+                  false,
+                error,
+              });
             }
-          );
 
-        if (
-          !response?.text
-        ) {
-          throw new Error(
-            `${responseName} returned an empty response`
-          );
-        }
+            await wait(
+              retryDelay
+            );
 
-        return parseJsonResponse(
-          response.text,
-          responseName
-        );
-      } catch (error) {
-        lastError = error;
+            continue;
+          }
 
-        console.error(
-          `${responseName} attempt ${attempt}/${MAX_RETRIES} failed:`,
-          error
-        );
+          const hasFallbackModel =
+            modelIndex <
+            GEMINI_MODELS.length -
+              1;
 
-        if (
-          attempt >=
-            MAX_RETRIES ||
-          !isRetryableError(
+          if (
+            retryable &&
+            hasFallbackModel
+          ) {
+            const nextModel =
+              GEMINI_MODELS[
+                modelIndex + 1
+              ];
+
+            console.warn(
+              `${responseName}: switching from ${model} to ${nextModel}`
+            );
+
+            if (
+              typeof onRetry ===
+              "function"
+            ) {
+              await onRetry({
+                model,
+                nextModel,
+                attempt,
+                maxAttempts:
+                  MAX_RETRIES_PER_MODEL,
+                retryDelay:
+                  RETRY_BASE_DELAY_MS,
+                switchingModel:
+                  true,
+                error,
+              });
+            }
+
+            await wait(
+              RETRY_BASE_DELAY_MS
+            );
+
+            break;
+          }
+
+          throw getFriendlyAiError(
             error
-          )
-        ) {
-          break;
+          );
         }
-
-        const retryDelay =
-          RETRY_DELAY_MS *
-          attempt;
-
-        if (
-          typeof onRetry ===
-          "function"
-        ) {
-          await onRetry({
-            attempt,
-            maxAttempts:
-              MAX_RETRIES,
-            retryDelay,
-            error,
-          });
-        }
-
-        await wait(
-          retryDelay
-        );
       }
     }
 
@@ -793,91 +995,69 @@ const createModuleSchema = (
 });
 
 /*
-  Validation
+  Input validation
 */
 
-const validateGenerationInput = ({
-  topic,
-  level,
-  language,
-  numberOfModules,
-  lessonsPerModule,
-}) => {
-  if (
-    !safeString(topic)
-  ) {
-    throw new Error(
-      "Course topic is required"
-    );
-  }
+const validateGenerationInput =
+  ({
+    topic,
+    language,
+    numberOfModules,
+    lessonsPerModule,
+  }) => {
+    if (
+      safeString(topic).length <
+      2
+    ) {
+      throw new Error(
+        "Course topic must contain at least 2 characters"
+      );
+    }
 
-  if (
-    safeString(topic).length <
-    2
-  ) {
-    throw new Error(
-      "Course topic must contain at least 2 characters"
-    );
-  }
+    if (
+      !safeString(language)
+    ) {
+      throw new Error(
+        "Course language is required"
+      );
+    }
 
-  if (
-    !Number.isInteger(
-      numberOfModules
-    ) ||
-    numberOfModules < 1 ||
-    numberOfModules > 8
-  ) {
-    throw new Error(
-      "Number of modules must be between 1 and 8"
-    );
-  }
+    if (
+      !Number.isInteger(
+        numberOfModules
+      ) ||
+      numberOfModules < 1 ||
+      numberOfModules > 8
+    ) {
+      throw new Error(
+        "Number of modules must be between 1 and 8"
+      );
+    }
 
-  if (
-    !Number.isInteger(
-      lessonsPerModule
-    ) ||
-    lessonsPerModule < 1 ||
-    lessonsPerModule > 6
-  ) {
-    throw new Error(
-      "Lessons per module must be between 1 and 6"
-    );
-  }
-
-  if (
-    !safeString(language)
-  ) {
-    throw new Error(
-      "Course language is required"
-    );
-  }
-
-  if (
-    ![
-      "Beginner",
-      "Intermediate",
-      "Advanced",
-    ].includes(
-      normalizeLevel(level)
-    )
-  ) {
-    throw new Error(
-      "Invalid course level"
-    );
-  }
-};
+    if (
+      !Number.isInteger(
+        lessonsPerModule
+      ) ||
+      lessonsPerModule < 1 ||
+      lessonsPerModule > 6
+    ) {
+      throw new Error(
+        "Lessons per module must be between 1 and 6"
+      );
+    }
+  };
 
 /*
-  Outline generation
+  Generate course outline
 */
 
 const generateCourseOutline =
   async ({
     topic,
-    level,
-    language,
-    numberOfModules,
-    lessonsPerModule,
+    level = "Beginner",
+    language = "English",
+    numberOfModules = 2,
+    lessonsPerModule = 2,
     onRetry,
   }) => {
     const normalizedInput = {
@@ -909,29 +1089,25 @@ const generateCourseOutline =
     );
 
     const prompt = `
-You are an expert curriculum designer for an online learning platform named SkillVerse.
+You are an expert curriculum designer for SkillVerse.
 
-Create only a high-level course outline.
+Create only a concise course outline.
 
-Course information:
 Topic: ${normalizedInput.topic}
 Difficulty: ${normalizedInput.level}
 Language: ${normalizedInput.language}
-Number of modules: ${normalizedInput.numberOfModules}
+Modules: ${normalizedInput.numberOfModules}
 Lessons per module: ${normalizedInput.lessonsPerModule}
 
-Requirements:
+Rules:
 
-1. Write all user-facing text in ${normalizedInput.language}.
+1. Write all user-facing content in ${normalizedInput.language}.
 2. Create exactly ${normalizedInput.numberOfModules} modules.
-3. Arrange modules from beginner foundations to practical advanced concepts.
-4. Do not generate complete lessons or quizzes in this response.
-5. Keep module descriptions concise.
-6. Use readable estimated durations.
-7. Return only JSON matching the schema.
-8. Do not include markdown or triple backticks.
-9. The course title must clearly describe ${normalizedInput.topic}.
-10. Use a short and accurate course category.
+3. Arrange modules from foundations to practical concepts.
+4. Do not create complete lessons or quizzes yet.
+5. Keep descriptions short and clear.
+6. Return only valid JSON matching the schema.
+7. Do not include markdown or triple backticks.
 `;
 
     const outline =
@@ -963,14 +1139,7 @@ Requirements:
         normalizedInput.numberOfModules
     ) {
       throw new Error(
-        `Gemini generated ${
-          Array.isArray(
-            outline.modules
-          )
-            ? outline.modules
-                .length
-            : 0
-        } modules instead of ${normalizedInput.numberOfModules}`
+        `Gemini must generate exactly ${normalizedInput.numberOfModules} modules`
       );
     }
 
@@ -984,7 +1153,7 @@ Requirements:
       description:
         safeString(
           outline.description,
-          `Learn ${normalizedInput.topic} through a complete structured course.`
+          `Learn ${normalizedInput.topic} through a structured course.`
         ),
 
       category:
@@ -1039,262 +1208,195 @@ Requirements:
   };
 
 /*
-  Module validation
+  Normalize generated module
 */
 
-const validateGeneratedModule = (
-  generatedModule,
-  expectedLessons,
-  moduleIndex
-) => {
-  if (
-    !generatedModule ||
-    typeof generatedModule !==
-      "object"
-  ) {
-    throw new Error(
-      `Generated module ${
-        moduleIndex + 1
-      } is invalid`
-    );
-  }
+const normalizeGeneratedModule =
+  (
+    generatedModule,
+    moduleOutline
+  ) => {
+    const lessons =
+      Array.isArray(
+        generatedModule.lessons
+      )
+        ? generatedModule.lessons
+        : [];
 
-  if (
-    !safeString(
-      generatedModule.title
-    )
-  ) {
-    throw new Error(
-      `Module ${
-        moduleIndex + 1
-      } title is missing`
-    );
-  }
+    const questions =
+      Array.isArray(
+        generatedModule.quiz
+          ?.questions
+      )
+        ? generatedModule.quiz
+            .questions
+        : [];
 
-  if (
-    !Array.isArray(
-      generatedModule.lessons
-    ) ||
-    generatedModule.lessons
-      .length !==
-      expectedLessons
-  ) {
-    throw new Error(
-      `Module ${
-        moduleIndex + 1
-      } must contain exactly ${expectedLessons} lessons`
-    );
-  }
+    return {
+      title:
+        safeString(
+          generatedModule.title,
+          moduleOutline.title
+        ),
 
-  generatedModule.lessons.forEach(
-    (
-      lesson,
-      lessonIndex
-    ) => {
-      if (
-        !safeString(
-          lesson.title
-        ) ||
-        !safeString(
-          lesson.content
-        )
-      ) {
-        throw new Error(
-          `Lesson ${
-            lessonIndex + 1
-          } is incomplete in module ${
-            moduleIndex + 1
-          }`
-        );
-      }
-    }
-  );
+      description:
+        safeString(
+          generatedModule.description,
+          moduleOutline.description
+        ),
 
-  if (
-    !generatedModule.quiz ||
-    !Array.isArray(
-      generatedModule.quiz
-        .questions
-    ) ||
-    generatedModule.quiz
-      .questions.length !== 5
-  ) {
-    throw new Error(
-      `Module ${
-        moduleIndex + 1
-      } quiz must contain exactly 5 questions`
-    );
-  }
-};
+      estimatedDuration:
+        safeString(
+          generatedModule
+            .estimatedDuration,
+          moduleOutline
+            .estimatedDuration ||
+            "1 Week"
+        ),
 
-const normalizeGeneratedModule = (
-  generatedModule,
-  moduleOutline
-) => ({
-  title:
-    safeString(
-      generatedModule.title,
-      moduleOutline.title
-    ),
+      lessons:
+        lessons.map(
+          (lesson) => ({
+            title:
+              safeString(
+                lesson.title,
+                "Untitled Lesson"
+              ),
 
-  description:
-    safeString(
-      generatedModule.description,
-      moduleOutline.description
-    ),
+            description:
+              safeString(
+                lesson.description
+              ),
 
-  estimatedDuration:
-    safeString(
-      generatedModule
-        .estimatedDuration,
-      moduleOutline
-        .estimatedDuration ||
-        "1 Week"
-    ),
+            content:
+              safeString(
+                lesson.content
+              ),
 
-  lessons:
-    generatedModule.lessons.map(
-      (lesson) => ({
+            lessonType:
+              normalizeLessonType(
+                lesson.lessonType
+              ),
+
+            durationMinutes:
+              normalizePositiveInteger(
+                lesson.durationMinutes,
+                15
+              ),
+
+            youtubeVideoId:
+              null,
+
+            youtubeVideoUrl:
+              null,
+
+            youtubeSearchQuery:
+              safeString(
+                lesson.youtubeSearchQuery,
+                `${safeString(
+                  lesson.title,
+                  moduleOutline.title
+                )} tutorial`
+              ),
+
+            codeLanguage:
+              safeString(
+                lesson.codeLanguage
+              ) || null,
+
+            codeExample:
+              safeString(
+                lesson.codeExample
+              ) || null,
+
+            practiceTask:
+              safeString(
+                lesson.practiceTask
+              ),
+
+            summary:
+              safeString(
+                lesson.summary
+              ),
+          })
+        ),
+
+      quiz: {
         title:
           safeString(
-            lesson.title,
-            "Untitled Lesson"
+            generatedModule.quiz
+              ?.title,
+            `${moduleOutline.title} Quiz`
           ),
 
         description:
           safeString(
-            lesson.description
+            generatedModule.quiz
+              ?.description
           ),
 
-        content:
-          safeString(
-            lesson.content
+        passingPercentage:
+          normalizePercentage(
+            generatedModule.quiz
+              ?.passingPercentage
           ),
 
-        lessonType:
-          normalizeLessonType(
-            lesson.lessonType
+        timeLimitMinutes:
+          normalizePositiveInteger(
+            generatedModule.quiz
+              ?.timeLimitMinutes,
+            10
           ),
 
-        durationMinutes:
-          normalizePositiveNumber(
-            lesson.durationMinutes,
-            15
-          ),
-
-        youtubeVideoId:
-          null,
-
-        youtubeVideoUrl:
-          null,
-
-        youtubeSearchQuery:
-          safeString(
-            lesson.youtubeSearchQuery,
-            `${safeString(
-              lesson.title,
-              moduleOutline.title
-            )} tutorial`
-          ),
-
-        codeLanguage:
-          safeString(
-            lesson.codeLanguage
-          ) || null,
-
-        codeExample:
-          safeString(
-            lesson.codeExample
-          ) || null,
-
-        practiceTask:
-          safeString(
-            lesson.practiceTask
-          ),
-
-        summary:
-          safeString(
-            lesson.summary
-          ),
-      })
-    ),
-
-  quiz: {
-    title:
-      safeString(
-        generatedModule.quiz
-          .title,
-        `${moduleOutline.title} Quiz`
-      ),
-
-    description:
-      safeString(
-        generatedModule.quiz
-          .description
-      ),
-
-    passingPercentage:
-      normalizePercentage(
-        generatedModule.quiz
-          .passingPercentage
-      ),
-
-    timeLimitMinutes:
-      normalizePositiveNumber(
-        generatedModule.quiz
-          .timeLimitMinutes,
-        10
-      ),
-
-    questions:
-      generatedModule.quiz
-        .questions.map(
-          (question) => ({
-            question:
-              safeString(
-                question.question
-              ),
-
-            options: {
-              A:
+        questions:
+          questions.map(
+            (question) => ({
+              question:
                 safeString(
-                  question.options
-                    ?.A
+                  question.question
                 ),
 
-              B:
+              options: {
+                A:
+                  safeString(
+                    question.options
+                      ?.A
+                  ),
+
+                B:
+                  safeString(
+                    question.options
+                      ?.B
+                  ),
+
+                C:
+                  safeString(
+                    question.options
+                      ?.C
+                  ),
+
+                D:
+                  safeString(
+                    question.options
+                      ?.D
+                  ),
+              },
+
+              correctOption:
                 safeString(
-                  question.options
-                    ?.B
-                ),
+                  question.correctOption,
+                  "A"
+                ).toUpperCase(),
 
-              C:
+              explanation:
                 safeString(
-                  question.options
-                    ?.C
+                  question.explanation
                 ),
-
-              D:
-                safeString(
-                  question.options
-                    ?.D
-                ),
-            },
-
-            correctOption:
-              safeString(
-                question.correctOption,
-                "A"
-              ).toUpperCase(),
-
-            explanation:
-              safeString(
-                question.explanation
-              ),
-          })
-        ),
-  },
-});
+            })
+          ),
+      },
+    };
+  };
 
 /*
   Generate one complete module
@@ -1314,18 +1416,8 @@ const generateCompleteModule =
     previousModuleTitles = [],
     onRetry,
   }) => {
-    const previousModulesText =
-      previousModuleTitles.length >
-      0
-        ? previousModuleTitles.join(
-            ", "
-          )
-        : "None";
-
     const prompt = `
-You are creating module ${
-      moduleIndex + 1
-    } of ${numberOfModules} for SkillVerse.
+You are creating Module ${moduleIndex + 1} of ${numberOfModules} for SkillVerse.
 
 Course topic:
 ${topic}
@@ -1348,33 +1440,33 @@ ${moduleOutline.title}
 Module description:
 ${moduleOutline.description}
 
-Estimated duration:
-${moduleOutline.estimatedDuration}
-
 Previous modules:
-${previousModulesText}
+${
+  previousModuleTitles.length
+    ? previousModuleTitles.join(
+        ", "
+      )
+    : "None"
+}
 
-Requirements:
+Rules:
 
 1. Write all user-facing content in ${language}.
 2. Create exactly ${lessonsPerModule} lessons.
-3. Every lesson must teach a different concept.
-4. Arrange lessons in a logical order.
-5. Each lesson content must be approximately 120 to 180 words.
-6. Avoid markdown tables and triple backticks.
-7. lessonType must be video, article, code or project.
-8. durationMinutes must be between 5 and 90.
-9. youtubeSearchQuery must be a search phrase, not a URL.
-10. Programming lessons should include a short working code example.
-11. Non-programming lessons should use empty code fields.
-12. Every lesson needs a practical task and summary.
-13. Create exactly one module quiz.
-14. The quiz must contain exactly 5 questions.
-15. Every question must contain A, B, C and D options.
-16. correctOption must be A, B, C or D.
-17. Every question needs a concise explanation.
-18. Do not repeat concepts from previous modules.
-19. Return only JSON matching the schema.
+3. Each lesson content should be approximately 100 to 160 words.
+4. Every lesson must teach a different concept.
+5. lessonType must be video, article, code or project.
+6. durationMinutes must be between 5 and 90.
+7. youtubeSearchQuery must be a search phrase, not a URL.
+8. Programming lessons should include a short working code example.
+9. Non-programming lessons should use empty code fields.
+10. Every lesson needs a practical task and summary.
+11. Create exactly 5 quiz questions.
+12. Each question must contain A, B, C and D options.
+13. correctOption must be A, B, C or D.
+14. Avoid repeating previous modules.
+15. Return only valid JSON matching the schema.
+16. Do not include markdown or triple backticks.
 `;
 
     const generatedModule =
@@ -1400,11 +1492,35 @@ Requirements:
         onRetry,
       });
 
-    validateGeneratedModule(
-      generatedModule,
-      lessonsPerModule,
-      moduleIndex
-    );
+    if (
+      !Array.isArray(
+        generatedModule.lessons
+      ) ||
+      generatedModule.lessons
+        .length !==
+        lessonsPerModule
+    ) {
+      throw new Error(
+        `Module ${
+          moduleIndex + 1
+        } must contain exactly ${lessonsPerModule} lessons`
+      );
+    }
+
+    if (
+      !Array.isArray(
+        generatedModule.quiz
+          ?.questions
+      ) ||
+      generatedModule.quiz
+        .questions.length !== 5
+    ) {
+      throw new Error(
+        `Module ${
+          moduleIndex + 1
+        } must contain exactly 5 quiz questions`
+      );
+    }
 
     return normalizeGeneratedModule(
       generatedModule,
@@ -1413,7 +1529,7 @@ Requirements:
   };
 
 /*
-  Backward-compatible complete generation
+  Backward-compatible complete course generator
 */
 
 const generateCourseWithGemini =
@@ -1421,42 +1537,16 @@ const generateCourseWithGemini =
     topic,
     level = "Beginner",
     language = "English",
-    numberOfModules = 4,
-    lessonsPerModule = 3,
+    numberOfModules = 2,
+    lessonsPerModule = 2,
     completedModules = [],
     onProgress,
     onModuleGenerated,
   }) => {
-    const normalizedInput = {
-      topic:
-        safeString(topic),
-
-      level:
-        normalizeLevel(level),
-
-      language:
-        safeString(
-          language,
-          "English"
-        ),
-
-      numberOfModules:
-        Number(
-          numberOfModules
-        ),
-
-      lessonsPerModule:
-        Number(
-          lessonsPerModule
-        ),
-    };
-
-    validateGenerationInput(
-      normalizedInput
-    );
-
     const reportProgress =
-      async (progressData) => {
+      async (
+        progressData
+      ) => {
         if (
           typeof onProgress ===
           "function"
@@ -1467,215 +1557,198 @@ const generateCourseWithGemini =
         }
       };
 
-    try {
-      await reportProgress({
-        stage:
-          "outline",
+    const outline =
+      await generateCourseOutline({
+        topic,
+        level,
+        language,
+        numberOfModules,
+        lessonsPerModule,
 
-        message:
-          "Creating the course roadmap",
+        onRetry:
+          async ({
+            attempt,
+            maxAttempts,
+            model,
+            nextModel,
+            switchingModel,
+          }) => {
+            await reportProgress({
+              stage:
+                "outline_retry",
 
-        percentage: 5,
+              percentage: 5,
+
+              message:
+                switchingModel
+                  ? `Switching AI model from ${model} to ${nextModel}`
+                  : `Retrying course roadmap (${attempt}/${maxAttempts})`,
+            });
+          },
       });
 
-      const outline =
-        await generateCourseOutline({
-          ...normalizedInput,
+    const generatedModules = [
+      ...completedModules,
+    ];
+
+    const completedOrders =
+      new Set(
+        completedModules.map(
+          (module) =>
+            Number(
+              module.moduleOrder
+            )
+        )
+      );
+
+    for (
+      let moduleIndex = 0;
+      moduleIndex <
+      outline.modules.length;
+      moduleIndex += 1
+    ) {
+      const moduleOrder =
+        moduleIndex + 1;
+
+      if (
+        completedOrders.has(
+          moduleOrder
+        )
+      ) {
+        continue;
+      }
+
+      const moduleOutline =
+        outline.modules[
+          moduleIndex
+        ];
+
+      await reportProgress({
+        stage:
+          "module",
+
+        moduleOrder,
+
+        totalModules:
+          outline.modules.length,
+
+        percentage:
+          Math.min(
+            90,
+            10 +
+              Math.round(
+                (
+                  moduleIndex /
+                  outline.modules
+                    .length
+                ) *
+                  80
+              )
+          ),
+
+        message:
+          `Generating Module ${moduleOrder} of ${outline.modules.length}: ${moduleOutline.title}`,
+      });
+
+      const moduleData =
+        await generateCompleteModule({
+          topic,
+          courseTitle:
+            outline.title,
+          courseDescription:
+            outline.description,
+          level:
+            outline.level,
+          language:
+            outline.language,
+          moduleOutline,
+          moduleIndex,
+          numberOfModules:
+            outline.modules.length,
+          lessonsPerModule,
+          previousModuleTitles:
+            generatedModules.map(
+              (module) =>
+                module.title
+            ),
 
           onRetry:
             async ({
               attempt,
               maxAttempts,
+              model,
+              nextModel,
+              switchingModel,
             }) => {
               await reportProgress({
                 stage:
-                  "outline_retry",
+                  "module_retry",
+
+                moduleOrder,
+
+                totalModules:
+                  outline.modules
+                    .length,
 
                 message:
-                  `Retrying course roadmap (${attempt}/${maxAttempts})`,
-
-                percentage: 5,
+                  switchingModel
+                    ? `Module ${moduleOrder}: switching from ${model} to ${nextModel}`
+                    : `Retrying Module ${moduleOrder} (${attempt}/${maxAttempts})`,
               });
             },
         });
 
-      const generatedModules = [
-        ...completedModules,
-      ];
+      const orderedModule = {
+        ...moduleData,
+        moduleOrder,
+      };
 
-      const completedModuleOrders =
-        new Set(
-          completedModules.map(
-            (module) =>
-              Number(
-                module.moduleOrder
-              )
-          )
-        );
+      generatedModules.push(
+        orderedModule
+      );
 
-      for (
-        let moduleIndex = 0;
-        moduleIndex <
-        outline.modules.length;
-        moduleIndex += 1
+      if (
+        typeof onModuleGenerated ===
+        "function"
       ) {
-        const moduleOrder =
-          moduleIndex + 1;
-
-        if (
-          completedModuleOrders.has(
-            moduleOrder
-          )
-        ) {
-          continue;
-        }
-
-        const moduleOutline =
-          outline.modules[
-            moduleIndex
-          ];
-
-        await reportProgress({
-          stage:
-            "module",
-
-          moduleOrder,
-
-          totalModules:
-            outline.modules.length,
-
-          message:
-            `Generating Module ${moduleOrder} of ${outline.modules.length}: ${moduleOutline.title}`,
-
-          percentage:
-            Math.min(
-              90,
-              10 +
-                Math.round(
-                  (moduleIndex /
-                    outline.modules
-                      .length) *
-                    80
-                )
-            ),
-        });
-
-        const previousModuleTitles =
-          generatedModules.map(
-            (module) =>
-              module.title
-          );
-
-        const generatedModule =
-          await generateCompleteModule({
-            topic:
-              normalizedInput.topic,
-
-            courseTitle:
-              outline.title,
-
-            courseDescription:
-              outline.description,
-
-            level:
-              normalizedInput.level,
-
-            language:
-              normalizedInput.language,
-
-            moduleOutline,
-
-            moduleIndex,
-
-            numberOfModules:
-              outline.modules.length,
-
-            lessonsPerModule:
-              normalizedInput.lessonsPerModule,
-
-            previousModuleTitles,
-
-            onRetry:
-              async ({
-                attempt,
-                maxAttempts,
-              }) => {
-                await reportProgress({
-                  stage:
-                    "module_retry",
-
-                  moduleOrder,
-
-                  totalModules:
-                    outline.modules
-                      .length,
-
-                  message:
-                    `Retrying Module ${moduleOrder} (${attempt}/${maxAttempts})`,
-
-                  percentage:
-                    Math.min(
-                      90,
-                      10 +
-                        Math.round(
-                          (moduleIndex /
-                            outline.modules
-                              .length) *
-                            80
-                        )
-                    ),
-                });
-              },
-          });
-
-        const moduleWithOrder = {
-          ...generatedModule,
-          moduleOrder,
-        };
-
-        generatedModules.push(
-          moduleWithOrder
+        await onModuleGenerated(
+          orderedModule
         );
-
-        if (
-          typeof onModuleGenerated ===
-          "function"
-        ) {
-          await onModuleGenerated(
-            moduleWithOrder
-          );
-        }
-
-        await reportProgress({
-          stage:
-            "module_saved",
-
-          moduleOrder,
-
-          totalModules:
-            outline.modules.length,
-
-          message:
-            `Module ${moduleOrder} of ${outline.modules.length} saved successfully`,
-
-          percentage:
-            Math.min(
-              95,
-              10 +
-                Math.round(
-                  (moduleOrder /
-                    outline.modules
-                      .length) *
-                    80
-                )
-            ),
-        });
       }
+    }
 
-      const sortedModules =
+    return {
+      title:
+        outline.title,
+
+      description:
+        outline.description,
+
+      category:
+        outline.category,
+
+      level:
+        outline.level,
+
+      language:
+        outline.language,
+
+      estimatedDuration:
+        outline.estimatedDuration,
+
+      status:
+        "published",
+
+      generatedByAi:
+        true,
+
+      modules:
         generatedModules
           .sort(
-            (first, second) =>
+            (
+              first,
+              second
+            ) =>
               Number(
                 first.moduleOrder
               ) -
@@ -1688,56 +1761,8 @@ const generateCourseWithGemini =
               moduleOrder,
               ...module
             }) => module
-          );
-
-      await reportProgress({
-        stage:
-          "completed",
-
-        message:
-          "Course generated successfully",
-
-        percentage: 100,
-      });
-
-      return {
-        title:
-          outline.title,
-
-        description:
-          outline.description,
-
-        category:
-          outline.category,
-
-        level:
-          outline.level,
-
-        language:
-          outline.language,
-
-        estimatedDuration:
-          outline.estimatedDuration,
-
-        status:
-          "published",
-
-        generatedByAi:
-          true,
-
-        modules:
-          sortedModules,
-      };
-    } catch (error) {
-      console.error(
-        "AI Course Generation Error:",
-        error
-      );
-
-      throw getFriendlyAiError(
-        error
-      );
-    }
+          ),
+    };
   };
 
 module.exports = {
