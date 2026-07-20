@@ -66,37 +66,157 @@ const PORT =
       5000
   );
 
-app.use(
-  helmet()
+const normalizeOrigin = (
+  value
+) => {
+  return String(
+    value || ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
+};
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://skillverse-frontend-fawn.vercel.app",
+  process.env.FRONTEND_URL,
+]
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const uniqueAllowedOrigins = [
+  ...new Set(
+    allowedOrigins
+  ),
+];
+
+const corsOptions = {
+  origin: (
+    origin,
+    callback
+  ) => {
+    /*
+      Postman, server-to-server requests
+      आणि काही mobile clients मध्ये
+      origin header नसू शकतो.
+    */
+    if (!origin) {
+      return callback(
+        null,
+        true
+      );
+    }
+
+    const normalizedRequestOrigin =
+      normalizeOrigin(
+        origin
+      );
+
+    if (
+      uniqueAllowedOrigins.includes(
+        normalizedRequestOrigin
+      )
+    ) {
+      return callback(
+        null,
+        true
+      );
+    }
+
+    /*
+      Vercel preview deployments allow करण्यासाठी.
+      Production domain सुद्धा वर exact list मध्ये आहे.
+    */
+    const isAllowedVercelPreview =
+      /^https:\/\/skillverse-frontend-[a-z0-9-]+\.vercel\.app$/i.test(
+        normalizedRequestOrigin
+      );
+
+    if (
+      isAllowedVercelPreview
+    ) {
+      return callback(
+        null,
+        true
+      );
+    }
+
+    console.warn(
+      `Blocked CORS origin: ${normalizedRequestOrigin}`
+    );
+
+    const corsError =
+      new Error(
+        `CORS blocked for origin: ${normalizedRequestOrigin}`
+      );
+
+    corsError.status = 403;
+
+    return callback(
+      corsError
+    );
+  },
+
+  credentials: true,
+
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+  ],
+
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+  ],
+
+  exposedHeaders: [
+    "Content-Disposition",
+  ],
+
+  optionsSuccessStatus: 204,
+
+  maxAge: 86400,
+};
+
+app.disable(
+  "x-powered-by"
+);
+
+app.set(
+  "trust proxy",
+  1
 );
 
 app.use(
-  cors({
-    origin:
-      process.env
-        .FRONTEND_URL ||
-      "http://localhost:5173",
+  helmet({
+    crossOriginResourcePolicy: {
+      policy:
+        "cross-origin",
+    },
 
-    credentials: true,
-
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS",
-    ],
-
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-    ],
+    contentSecurityPolicy:
+      false,
   })
 );
 
 app.use(
-  morgan("dev")
+  cors(
+    corsOptions
+  )
+);
+
+app.use(
+  morgan(
+    process.env.NODE_ENV ===
+      "production"
+      ? "combined"
+      : "dev"
+  )
 );
 
 app.use(
@@ -122,12 +242,47 @@ app.get(
     req,
     res
   ) => {
-    res.status(200).json({
-      success: true,
+    return res
+      .status(200)
+      .json({
+        success: true,
 
-      message:
-        "SkillVerse backend is running",
-    });
+        message:
+          "SkillVerse backend is running",
+
+        environment:
+          process.env.NODE_ENV ||
+          "development",
+
+        timestamp:
+          new Date()
+            .toISOString(),
+      });
+  }
+);
+
+app.get(
+  "/api/health",
+  (
+    req,
+    res
+  ) => {
+    return res
+      .status(200)
+      .json({
+        success: true,
+
+        message:
+          "SkillVerse API is healthy",
+
+        environment:
+          process.env.NODE_ENV ||
+          "development",
+
+        timestamp:
+          new Date()
+            .toISOString(),
+      });
   }
 );
 
@@ -171,12 +326,14 @@ app.use(
     req,
     res
   ) => {
-    res.status(404).json({
-      success: false,
+    return res
+      .status(404)
+      .json({
+        success: false,
 
-      message:
-        `Route not found: ${req.method} ${req.originalUrl}`,
-    });
+        message:
+          `Route not found: ${req.method} ${req.originalUrl}`,
+      });
   }
 );
 
@@ -192,10 +349,16 @@ app.use(
       error
     );
 
-    res
-      .status(
+    const statusCode =
+      Number(
         error.status ||
+          error.statusCode ||
           500
+      );
+
+    return res
+      .status(
+        statusCode
       )
       .json({
         success: false,
@@ -203,6 +366,13 @@ app.use(
         message:
           error.message ||
           "Internal server error",
+
+        ...(process.env
+          .NODE_ENV !==
+          "production" && {
+          stack:
+            error.stack,
+        }),
       });
   }
 );
@@ -214,13 +384,20 @@ const startServer =
 
       app.listen(
         PORT,
+        "0.0.0.0",
         () => {
           console.log(
             `🚀 Server running on port ${PORT}`
           );
 
           console.log(
-            `🔗 API URL: http://localhost:${PORT}`
+            `🌐 Allowed origins: ${uniqueAllowedOrigins.join(
+              ", "
+            )}`
+          );
+
+          console.log(
+            `🔗 Health check: /api/health`
           );
         }
       );
